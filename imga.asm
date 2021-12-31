@@ -27,8 +27,8 @@
 IMPULSE_LEN     EQU     384                     ; Amp. model impulse response length
 OP_BUFF_LEN     EQU     4                       ; Output buffer length, in samples
 IP_BUFF_LEN     EQU     IMPULSE_LEN+OP_BUFF_LEN ; Input buffer length, in samples
-SIZEOF_STACK    EQU     16                      ; Software stack size
 FRAME_TICKS     EQU     40-1                    ; UI frame period (ms)
+DISP_TIMEOUT    EQU     125-1                   ; Display timeout (frames)
 
 ; Memory map constants
 ROM_BASE        EQU     $E000           ; EEPROM base address
@@ -54,14 +54,17 @@ TCSR            EQU     $FFDE           ; Timer Control/Status Register
 ; Bit field constants
 CLB             EQU     18              ; Codec control latch bit
 TDE             EQU     6               ; SSI transmit data empty flag
-OVR             EQU     21              ; ADC overrange flag
+OVR             EQU     21              ; CODEC overrange flag
+ENC             EQU     0               ; Encoder change flag
+SWC             EQU     1               ; Switch press flag
+ADC             EQU     2               ; ADC overrange flag
+ALU             EQU     3               ; ALU limit flag
 
 ; Enumerations.
-NUM_MENU        EQU     4               ; Number of menu pages
 NUM_TYPE        EQU     6               ; Number of model types
-PAGE_MENU       EQU     NUM_MENU        ; Menu page numer
+NUM_MENU        EQU     4               ; Number of menu pages
+PAGE_MENU       EQU     NUM_MENU+0      ; Menu page numer
 PAGE_OVER       EQU     NUM_MENU+1      ; Over page number
-PAGE_BLNK       EQU     NUM_MENU+2      ; Blanking page number
 
 ; Internal Y memory
                 ORG     Y:$0000
@@ -85,9 +88,6 @@ tabEncdr        DC      $000000         ; Encoder delta table
                 DC      $FF0000         ;
                 DC      $010000         ;
                 DC      $000000         ;
-pinSwtch        DC      0               ; Previous switch pin state
-pinEncdr        DC      0               ; Previous encoder pin states
-frmTicks        DC      FRAME_TICKS     ; Frame tick counter
 endOvlyY
 
 ; Internal X memory
@@ -142,7 +142,6 @@ tabFunc         DC      funcAttn                        ; Menu function pointer 
                 DC      funcInfo                        ;
                 DC      funcMenu                        ;
                 DC      funcOver                        ;
-                DC      funcBlnk                        ;
 tabStr          DC      strAttn+3                       ; Menu string pointer table
                 DC      strGain+3                       ;
                 DC      strType+3                       ;
@@ -153,23 +152,24 @@ tabNavi         DC      PAGE_MENU                       ; Menu navigation table
                 DC      PAGE_MENU                       ;
 posMenu         DC      0                               ;
 posOver         DC      PAGE_MENU                       ;
-posBlnk         DC      PAGE_MENU                       ;
 posPage         DC      PAGE_MENU               ; Current page number
 posType         DC      NUM_TYPE-1              ; Model type number
 posInfo         DC      0                       ; Info string position
 prvEncdr        DC      0                       ; Previous encoder position
 posEncdr        DC      0                       ; Encoder position
-cdcRxRight      DC      0                       ; Right input channel bin
-                DS      2                       ; Spare
+pinSwtch        DC      0                       ; Previous switch pin state
+pinEncdr        DC      0                       ; Previous encoder pin states
+frmTicks        DC      FRAME_TICKS             ; Frame tick counter
+dispTimer       DC      DISP_TIMEOUT            ; Display timeout counter
+eventFlags      DC      0                       ; UI event flags
 
 ; External overlaid X memory
-strImga         DC      'I.M.G.A. Ver 1.0 (c) G. Mills 2021  I.M'       ;
+strImga         DC      'I.M.G.A. Ver 1.1 (c) G. Mills 2021  I.M'       ;
 strAttn         DC      'Attn'                  ; Display strings
 strGain         DC      'Gain'                  ;
 strType         DC      'Type'                  ;
 strInfo         DC      'Info'                  ;
 strOver         DC      'OVR!'                  ;
-strBlnk         DC      '    '                  ;
 strParam        DC      '????'                  ;
 
 modAC30                                         ; Amplifier models
@@ -191,6 +191,7 @@ endOvlyX
                 ORG     X:endOvlyX
 
                 DS      IMPULSE_LEN-1           ; Passthrough response tail
+cdcRxRight      DS      1                       ; Right input channel bin
 bufAudioOP      DSM     2*OP_BUFF_LEN           ; Stereo audio output buffer
 bufAudioIP      DSM     IP_BUFF_LEN             ; Mono audio input buffer
 endBssX
@@ -202,8 +203,8 @@ endBssX
                 nop                             ;
 
                 DUP     5
-                move    #<*,y1                  ; $02 to $0A - Unexpected
-                jmp     <excUnexpeced           ;
+                jmp     <*                      ; $02 to $0A - Unused
+                nop                             ;
                 ENDM
 
                 jsr     <isrSSIRx               ; $0C - SSI receive data
@@ -218,16 +219,50 @@ endBssX
                 jsr     <isrSSITx               ; $12 - SSI transmit data w/exc
                 nop                             ;
 
-                DUP     20
-                move    #<*,y1                  ; $14 to $3A - Unexpected
-                jmp     <excUnexpeced           ;
-                ENDM
+; SSI receive interrupt service routine
+isrSSIRx        move    x:(r3)+,m4              ; m4 = *r3++, rx_length - 1
+                move    x:(r3)+,n4              ; n4 = *r3++, rx_offset
+                move    x:(r3),r4               ; r4 = *r3, rx_address
+                nop                             ; stall
+                movep   x:SSIDR,x:(r4)+n4       ; *r4++ = SSIRX
+                move    r4,x:(r3)+              ; *r3++ = r4, rx_address
+                rti                             ;
 
+; SSI transmit interrupt service routine
+isrSSITx        move    x:(r2)+,m4              ; m4 = *r2++, tx_length - 1
+                move    x:(r2)+,n4              ; n4 = *r2++, tx_offset
+                move    x:(r2),r4               ; r4 = *r2, tx_address
+                nop                             ; stall
+                movep   x:(r4)+n4,x:SSIDR       ; SSITX = *r4++
+                move    r4,x:(r2)+              ; *r2++ = r4, tx_address
+                rti                             ;
+
+; Timer interrupt service routine
+isrTimer        move    #>1,x1                          ; x1 = 1
+                move    x:frmTicks,b                    ; b = frmTicks
+                sub     x1,b            #>$6000,x1      ; x1 = encoder pin mask
+                move    b1,x:frmTicks                   ; frmTicks = b--
+                                                ; Update rotary encoder position counter
+                movep   x:PBD,b                         ; b = port B
+                and     x1,b            x:pinEncdr,x1   ; b = enc pins, x1 = pinEncdr
+                lsr     b               b1,x:pinEncdr   ; pinEncdr = enc pins
+                lsr     b                               ; b = enc pins >> 2
+                or      x1,b            #>$1000,y1      ; y1 = 1 / 2**11
+                move    b1,x1                           ; x1 = pinEncdr | (enc pins >> 2)
+                mpy     x1,y1,b                         ; b = x1 >> 11
+                move    b1,n7                           ; n7 = delta offset
+                move    x:posEncdr,b                    ; b = posEncdr
+                move    y:(r7+n7),y1                    ; y1 = delta
+                add     y1,b                            ; b = posEncdr + delta
+                move    b1,x:posEncdr                   ; posEncdr += delta
+                rti                                     ;
+
+                                        ; Exception vector table continued
                 jsr     <isrTimer               ; $3C - Timer
                 nop                             ;
 
-                move    #<*,y1                  ; $3E - Unexpected
-                jmp     <excUnexpeced           ;
+                jmp     <*                      ; $3E - Unused
+                nop                             ;
 
                                         ; Reset entrypoint
 reset           movep   #$262009,x:PCTL         ; PLL enabled, 4.0 MHz * 10 = 40.0 MHz
@@ -268,7 +303,7 @@ loopBssX
                 move    #>$6000,x0                      ; x0 = encoder pin mask
                 movep   x:PBD,a                         ; a = port B
                 and     x0,a                            ;
-                move    a1,y:pinEncdr                   ; pinEncdr = enc pins
+                move    a1,x:pinEncdr                   ; pinEncdr = enc pins
 
                                         ; Initialise codec
                 do      #500,loopCrst           ; Assert CRST~ for 500 * ...
@@ -349,54 +384,90 @@ loopConvolveX
                 move    a,x:(r0)+                       ; *right output++ = a
 
                                                 ; Check for UI frame period
-checkUI         clr     a               y:frmTicks,y0   ; x0 = frame tick counter
-                cmp     y0,a                            ; if (frame ticks != 0)
-                jne     <loopMain                       ;   skip UI proc
+checkUI         clr     a               x:frmTicks,x0   ; x0 = frmTicks
+                cmp     x0,a                            ; if (frmTicks > 0)
+                jlt     <loopMain                       ;   skip UI proc
 
                                                 ; UI Processing
-                move    #>FRAME_TICKS,y0                ; restart frame tick counter
-                move    y0,y:frmTicks                   ;
+                move    #>FRAME_TICKS,x0                ; restart frame tick counter
+                move    x0,x:frmTicks                   ;
 
-                                                ; Test for over events
-                move    x:posPage,a                     ; a = posPage
-                move    #>PAGE_OVER,x0                  ; x0 = PAGE_OVER
-                cmp     x0,a                            ;
-                jeq     <testSwitch                     ; if (posPage != PAGE_OVER)
-                btst    #OVR,x:cdcRxDat78               ;
-                jcc     <testLimit                      ;   if (OVR)
-                bclr    #OVR,x:cdcTxDat78               ;     clear OVR
-                move    a1,x:posOver                    ;     posOver = posPage
-                move    x0,x:posPage                    ;     posPage = PAGE_OVER
-testLimit       jlc     <testSwitch                     ;   if (L)
-                andi    #$BF,ccr                        ;     clear L
-                move    a1,x:posOver                    ;     posOver = posPage
-                move    x0,x:posPage                    ;     posPage = PAGE_OVER
+                                                ; Test for ALU limiting
+                jlc     <testRange                      ; if (L)
+                bset    #ALU,x:eventFlags               ;   eventFlags |= ALU
+
+                                                ; Test for ADC overrange
+testRange       btst    #OVR,x:cdcRxDat78               ;
+                jcc     <testSwitch                     ; if (OVR)
+                bset    #ADC,x:eventFlags               ;   eventFlags |= ADC
 
                                                 ; Test for switch press
 testSwitch      move    #>$1000,x0                      ; x0 = switch mask
                 movep   x:PBD,a                         ; a = port B
-                and     x0,a            y:pinSwtch,y0   ; a = new state, y0 = previous
-                cmp     y0,a            a1,y:pinSwtch   ; if (new - previous < 0)
-                jge     <updateEnc                      ;   falling edge, change page
-                move    #tabNavi,r6                     ;   r6 = tabNavi
-                move    x:posPage,n6                    ;   n6 = posPage
-                bset    #OVR,x:cdcTxDat78               ;   (re)enable OVR detect
-                move    x:(r6+n6),n6                    ;   n6 = tabNavi[posPage]
-                move    n6,x:posPage                    ;   posPage = n6
+                and     x0,a            x:pinSwtch,x0   ; a = curr, x0 = prev
+                cmp     x0,a            a1,x:pinSwtch   ; prev = curr
+                jge     <testEncoder                    ; if (swc change < 0)
+                bset    #SWC,x:eventFlags               ;   eventFlags |= SWC
 
-                                                ; Update encoder parameter
-updateEnc       move    x:posEncdr,a                    ; a = current enc position
+                                                ; Test for encoder change
+testEncoder     move    x:posEncdr,a                    ; a = current enc position
                 move    x:prvEncdr,x0                   ; x0 = previous enc position
-                move    #tabFunc,r6                     ; r6 = tabFunc
-                move    x:posPage,n6                    ; n6 = posPage
                 sub     x0,a            a1,x:prvEncdr   ; a = curr - prev, prev = curr
+                move    a1,x0                           ; x0 = enc change
+                jeq     <testPage                       ; if (enc change ! = 0)
+                bset    #ENC,x:eventFlags               ;   eventFlags |= ENC
+
+                                                ; Update UI state
+testPage        move    x:posPage,a                     ; a = posPage
+                move    #>PAGE_OVER,y0                  ; y0 = PAGE_OVER
+                cmp     y0,a            #tabNavi,r6     ; r6 = tabNavi
+                jne     <normPage                       ; if (posPage == PAGE_OVER)
+                bset    #OVR,x:cdcTxDat78               ;   re-enable OVR detect
+                move    x:eventFlags,a                  ;   a = eventFlags
+                move    #>$3,y0                         ;   y0 = SWC | ENC
+                and     y0,a            x:posPage,n6    ;   n6 = posPage
+                jeq     <updateUI                       ;   if (SWC || ENC)
+                move    x:(r6+n6),n6                    ;     n6 = tabNavi[posPage]
+                move    n6,x:posPage                    ;     posPage = n6
+                jmp     <updateUI                       ; else
+normPage        move    x:eventFlags,a                  ;   a = eventFlags
+                move    #>$C,y0                         ;   y0 = ALU | ADC
+                and     y0,a            x:posPage,n6    ;   n6 = posPage
+                jeq     <testNavi                       ;   if (ALU || ADC)
+                move    n6,x:posOver                    ;     posOver = posPage
+                move    #PAGE_OVER,n6                   ;     n6 = PAGE_OVER
+                move    n6,x:posPage                    ;     posPage = n6
+                bclr    #OVR,x:cdcTxDat78               ;     clear OVR
+                andi    #$BF,ccr                        ;     clear L
+                jmp     <updateUI                       ;
+testNavi        move    x:eventFlags,a                  ;   a = eventFlags
+                move    #>$2,y0                         ;   y0 = SWC
+                and     y0,a                            ;
+                jeq     <updateUI                       ;   else if (SWC)
+                move    x:(r6+n6),n6                    ;     n6 = tabNavi[posPage]
+                move    n6,x:posPage                    ;     posPage = n6
+updateUI        move    #tabFunc,r6                     ; r6 = tabFunc
+                nop                                     ; stall
                 move    x:(r6+n6),r6                    ; r6 = tabFunc[posPage]
-                move    a1,x0                           ; x0 = encoder chg
+                nop                                     ; stall
                 jsr     (r6)                            ; call current page function
 
+                                                ; Update display blanking timer
+                clr     a               x:eventFlags,x0         ;
+                cmp     x0,a            a1,x:eventFlags         ;
+                move    x:dispTimer,a                           ; a = dispTimer
+                move    #>DISP_TIMEOUT,x0                       ; if (eventFlags != 0)
+                tne     x0,a                                    ;   a = DISP_TIMEOUT
+                move    #<0,x0                                  ; if (a == 0)
+                cmp     x0,a            #>1,x0                  ;   a = 1
+                teq     x0,a                                    ; a--
+                sub     x0,a            #>$000400,x0            ; if (a == 0)
+                move    a1,x:dispTimer                          ;   a = !DNCE | DNWR | !DNBL
+                move    #>$000480,a                             ; else
+                teq     x0,a                                    ;   a = !DNCE | DNWR | DNBL
+
                                                 ; Update display
-                move    #>$000480,a                     ; a = !DNCE | DNWR | DNBL
-                move    #>$100,x0                       ; x0 = display address inc
+                move    #>$100,x0                       ; x0 = display address increment
                 move    #>$FFFF80,y0                    ; y0 = data mask
 
                 do      #4,loopDisp                     ; for each display digit..
@@ -409,7 +480,9 @@ updateEnc       move    x:posEncdr,a                    ; a = current enc positi
                 move    a1,x:PBD                        ;   port B = a
                 add     x0,a                            ;   increment address
 loopDisp
-                movep   #$000C80,x:PBD                  ; port B = DNCE | DNWR | DNBL
+                move    #>$000800,y0                    ; y0 = DNCE
+                or      y0,a                            ; a = DNCE | a
+                move    a1,x:PBD                        ; port B = a
 
                 jmp     <loopMain                       ;
 
@@ -528,10 +601,6 @@ funcOver        move    #>strOver+3,r6                  ; r6 = string final char
                 rts                                     ;
 
 
-funcBlnk        move    #>strBlnk+3,r6                  ; r6 = string final char address
-                rts                                     ;
-
-
 ; Convert 6-bit 3/2 dB value, in a[13:8], to a 2.1 digit display string, pointed to by r6
 dbs2str         move    #>@CVI(20*@POW(2,7+8)/3),x0     ; x0 = 20 / 3 justified
                 andi    #$FE,ccr                        ; clear carry flag
@@ -575,53 +644,5 @@ readROMWord     do      #3,loopROMWord          ; Repeat for each of 3 bytes
                 asr     a                       ;   a >>= 8
 loopROMWord
                 rts                             ;
-
-
-; Timer interrupt service routine
-isrTimer        move    #<0,x1                  ; Update frame tick counter
-                move    y:frmTicks,b                    ; b = frmTicks
-                cmp     x1,b            #>1,y1          ; if (b != 0)
-                teq     y1,b                            ;   b--
-                sub     y1,b            #>$6000,x1      ; x1 = encoder pin mask
-                move    b1,y:frmTicks                   ; frmTicks = b
-
-                                                ; Update rotary encoder position counter
-                movep   x:PBD,b                         ; b = port B
-                and     x1,b            y:pinEncdr,y1   ; b = enc pins, y1 = pinEncdr
-                lsr     b               b1,y:pinEncdr   ; pinEncdr = enc pins
-                lsr     b                               ; b = enc pins >> 2
-                or      y1,b            #>$1000,x1      ; x1 = 1 / 2**11
-                move    b1,y1                           ; y1 = pinEncdr | (enc pins >> 2)
-                mpy     x1,y1,b                         ; b = y1 >> 11
-                move    b1,n7                           ; n7 = delta offset
-                move    x:posEncdr,b                    ; b = posEncdr
-                move    y:(r7+n7),y1                    ; y1 = delta
-                add     y1,b                            ; b = posEncdr + delta
-                move    b1,x:posEncdr                   ; posEncdr += delta
-                rti                                     ;
-
-
-; SSI receive interrupt service routine
-isrSSIRx        move    x:(r3)+,m4              ; m4 = *r3++, rx_length - 1
-                move    x:(r3)+,n4              ; n4 = *r3++, rx_offset
-                move    x:(r3),r4               ; r4 = *r3, rx_address
-                nop                             ; Stall
-                movep   x:SSIDR,x:(r4)+n4       ; *r4++ = SSIRX
-                move    r4,x:(r3)+              ; *r3++ = r4, rx_address
-                rti                             ;
-
-
-; SSI transmit interrupt service routine
-isrSSITx        move    x:(r2)+,m4              ; m4 = *r2++, tx_length - 1
-                move    x:(r2)+,n4              ; n4 = *r2++, tx_offset
-                move    x:(r2),r4               ; r4 = *r2, tx_address
-                nop                             ; Stall
-                movep   x:(r4)+n4,x:SSIDR       ; SSITX = *r4++
-                move    r4,x:(r2)+              ; *r2++ = r4, tx_address
-                rti                             ;
-
-
-; Unexpected exception handler
-excUnexpeced    jmp     <*
 
                 END
