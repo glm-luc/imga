@@ -173,15 +173,15 @@ strOver         DC      'OVR!'                  ;
 strParam        DC      '????'                  ;
 
 modAC30                                         ; Amplifier models
-                INCLUDE 'ac30.inc'
+                INCLUDE 'models/ac30.inc'
 modJCM9
-                INCLUDE 'jcm9.inc'
+                INCLUDE 'models/jcm9.inc'
 modLC50
-                INCLUDE 'lc50.inc'
+                INCLUDE 'models/lc50.inc'
 modOrng
-                INCLUDE 'orng.inc'
+                INCLUDE 'models/orng.inc'
 modVntg
-                INCLUDE 'vntg.inc'
+                INCLUDE 'models/vntg.inc'
 modNone
                 DC      'NONE'
                 DC      -1.0                    ; Passthrough coefficient
