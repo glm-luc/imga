@@ -1,6 +1,6 @@
 ; Impulse Model Guitar Amplifier, targets DSP56002EVM.
 ;
-; Copyright (c) 2020-2021 Gordon Mills
+; Copyright (c) 2020-2022 Gordon Mills
 ;
 ; Permission is hereby granted, free of charge, to any person obtaining a copy
 ; of this software and associated documentation files (the "Software"), to deal
@@ -218,6 +218,11 @@ endBssX
 
                 jsr     <isrSSITx               ; $12 - SSI transmit data w/exc
                 nop                             ;
+
+; NOTE: The following routines are located in unused exception vector table entries,
+; in order to fit the program in internal P memory. The routines precisely fill the
+; available space here, so avoid modification. The assembler generates warnings for
+; this segment, as it incorrectly assumes that rti is executed without a prior jsr.
 
 ; SSI receive interrupt service routine
 isrSSIRx        move    x:(r3)+,m4              ; m4 = *r3++, rx_length - 1
