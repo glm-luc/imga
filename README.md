@@ -7,12 +7,14 @@ A guitar amplifier application targeting the Motorola DSP56002 EVM. The applicat
 
 The models directory contains impulse response data for each of the amplifiers, which is assembled into the application. Model data were generated from wav files obtained from Studio Nord Bremen using [shrimp.py](tools/shrimp.py). Another tool [pltimp.py](tools/pltimp.py) provides visualisation of impulse response data in both the time and frequency domains.
 
-<p><img src="https://github.com/gemini-v/imga/images/pltimp.png" width="400"/>Figure 1 - IMGA model time and frequency domain responses.</p>
+![figure](images/pltimp.png)
+
+Figure 1 - IMGA model time and frequency domain responses.
 
 To install dependencies for the tools, run:
 
     pip install numpy matplotlib samplerate
-    
+
 ## Hardware
 The DSP56002 EVM incorporates a 24-bit integer DSP, a 16-bit AD/DA converter with programmable gain amplifier, 32 k words of external SRAM, and provision for a parallel EEPROM. IMGA fits snugly into an 8 kB EEPROM (e.g. 28C64), alternatively a 32 kB part (e.g. 28C256) may be used.
 
@@ -38,15 +40,17 @@ The user interface is provided by a 4-character alphanumeric display (e.g. DLR24
 | 7 | /HREQ | Encoder A |
 | 2 | /HACK | Encoder B |
 
-<p><img src="https://github.com/gemini-v/imga/images/imgaproto.jpg" width="400"/>Figure 2 - The IMGA hardware prototype.</p>
+![photograph](images/imgaproto.jpg)
+
+Figure 2 - The IMGA hardware prototype.
 
 ## Operation
 A guitar may be directly connected to the IN jack of the EVM, and headphones to the PHONE jack. The amplifier is controlled through a two level menu system. The top level selects the parameter to be controlled, turning the encoder scrolls through Attn, Gain, Type, Info. Pushing the encoder then selects the parameter to be adjusted:
 
-Attn - Output attenuation (94.5 dB to 0 dB in 1.5 dB steps).
-Gain - Input gain (0 dB to 22.5 dB in 1.5 dB steps).
-Type - Amplifier model {AC30, JCM9, LC50, ORNG, VNTG}.
-Info - Copyright and version information.
+* Attn - Output attenuation (94.5 dB to 0 dB in 1.5 dB steps).
+* Gain - Input gain (0 dB to 22.5 dB in 1.5 dB steps).
+* Type - Amplifier model {AC30, JCM9, LC50, ORNG, VNTG}.
+* Info - Copyright and version information.
 
 Pushing the encoder once more returns to the top level menu.
 
